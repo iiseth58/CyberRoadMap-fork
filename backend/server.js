@@ -16,61 +16,53 @@ app.use(cors({
 app.use(express.json());
 
 // ── Passport Google Strategy ──────────────────────────────
-// Only set up Google OAuth if credentials are provided.
-// This lets the server start in environments (like this AWS deployment)
-// where Google OAuth isn't configured yet.
-if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.CALLBACK_URL) {
-  passport.use(new GoogleStrategy({
-    clientID: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: process.env.CALLBACK_URL
-  }, (accessToken, refreshToken, profile, done) => {
-    const email = profile.emails[0].value;
-    const name = profile.displayName;
-    const googleId = profile.id;
+passport.use(new GoogleStrategy({
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackURL: process.env.CALLBACK_URL
+}, (accessToken, refreshToken, profile, done) => {
+  const email = profile.emails[0].value;
+  const name = profile.displayName;
+  const googleId = profile.id;
 
-    // Check if user exists by google_id
-    db.query('SELECT * FROM users WHERE google_id = ?', [googleId], (err, rows) => {
+  // Check if user exists by google_id
+  db.query('SELECT * FROM users WHERE google_id = ?', [googleId], (err, rows) => {
+    if (err) return done(err, null);
+
+    if (rows.length > 0) {
+      // Existing Google user
+      return done(null, rows[0]);
+    }
+
+    // Check if email already registered with password
+    db.query('SELECT * FROM users WHERE email = ?', [email], (err, emailRows) => {
       if (err) return done(err, null);
 
-      if (rows.length > 0) {
-        // Existing Google user
-        return done(null, rows[0]);
-      }
-
-      // Check if email already registered with password
-      db.query('SELECT * FROM users WHERE email = ?', [email], (err, emailRows) => {
-        if (err) return done(err, null);
-
-        if (emailRows.length > 0) {
-          // Link google_id to existing account
-          db.query('UPDATE users SET google_id = ? WHERE email = ?', [googleId, email], (err) => {
+      if (emailRows.length > 0) {
+        // Link google_id to existing account
+        db.query('UPDATE users SET google_id = ? WHERE email = ?', [googleId, email], (err) => {
+          if (err) return done(err, null);
+          return done(null, emailRows[0]);
+        });
+      } else {
+        // New user via Google
+        db.query(
+          'INSERT INTO users (google_id, username, email) VALUES (?, ?, ?)',
+          [googleId, name, email],
+          (err, result) => {
             if (err) return done(err, null);
-            return done(null, emailRows[0]);
-          });
-        } else {
-          // New user via Google
-          db.query(
-            'INSERT INTO users (google_id, username, email) VALUES (?, ?, ?)',
-            [googleId, name, email],
-            (err, result) => {
-              if (err) return done(err, null);
-              return done(null, {
-                id: result.insertId,
-                username: name,
-                email,
-                role: 'user'
-              });
-            }
-          );
-        }
-      });
+            return done(null, {
+              id: result.insertId,
+              username: name,
+              email,
+              role: 'user'
+            });
+          }
+        );
+      }
     });
-  }));
-  console.log('✅ Google OAuth configured');
-} else {
-  console.log('⚠️  Google OAuth not configured (missing env vars) — skipping');
-}
+  });
+}));
 
 app.use(passport.initialize());
 
